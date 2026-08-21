@@ -48,12 +48,20 @@ const LAST_NAMES = [
   "Yamada", "Zielinski", "Abernathy", "Blackwood", "Corrigan", "Delacroix",
 ];
 
+// Audited so every pair stays below both fuzzy floors (contact companyFloor
+// 0.70, account nameFloor 0.80) even in the worst case of two records
+// randomly drawing the same suffix — see the task-6 commit message for how
+// this was found (the sweep's blocking-completeness invariant caught two
+// *different* prefixes, "Coalfield" and "Wrenfield", producing an
+// unintended cross-floor match purely by rhyme).
 const COMPANY_PREFIXES = [
-  "Solstice", "Marrow", "Gantry", "Petrel", "Coalfield", "Driftline",
-  "Amberlight", "Fernbridge", "Halcyon", "Ironvale", "Juniper", "Kettleford",
-  "Larkspur", "Mossgate", "Nightshade", "Oakhollow", "Pinegrove", "Quillfeather",
-  "Ridgeback", "Saltmarsh", "Thistledown", "Underglen", "Vaultbridge", "Wrenfield",
-  "Yellowbrook", "Zephyrline", "Ashgrove", "Briarcliff", "Clearwater", "Dovetail",
+  "Solstice", "Marrow", "Gantry", "Petrel", "Basalt", "Cinder", "Amberlight",
+  "Halcyon", "Larkspur", "Nightshade", "Quillfeather", "Ridgeback", "Saltmarsh",
+  "Vaultbridge", "Yellowbrook", "Zephyrline", "Clearwater", "Dovetail", "Obsidian",
+  "Wisteria", "Cormorant", "Flintlock", "Jackdaw", "Nomad", "Pinnacle", "Quartzite",
+  "Whitfield", "Xylo", "Driftwood", "Echelon", "Foxglove", "Glacier", "Ibis",
+  "Loft", "Monsoon", "Onyx", "Prairie", "Quicksilver", "Thicket", "Delta",
+  "Junction", "Keystone", "Orchid", "Redshift",
 ];
 
 const COMPANY_SUFFIXES = [
@@ -111,8 +119,22 @@ function formatPhone(rng: Rng, tenDigits: string): string {
   }
 }
 
-function companyName(rng: Rng): string {
-  return `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
+// `used` is scoped per entity type by the caller (contacts' `company` field
+// and accounts' `name` field are never compared to each other, so they don't
+// need to share a dedupe set) — retried up to 50 times, then disambiguated
+// with a number, so no two records in the same entity type ever draw the
+// exact same name (which the audited pool above alone can't guarantee).
+function companyName(rng: Rng, used: Set<string>): string {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const name = `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
+    if (!used.has(name)) {
+      used.add(name);
+      return name;
+    }
+  }
+  const name = `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)} ${rng.int(9000) + 1000}`;
+  used.add(name);
+  return name;
 }
 
 function accountRawName(rng: Rng, base: string): string {
@@ -136,20 +158,34 @@ function randomAddress(rng: Rng): string {
 
 function generateBaseContacts(rng: Rng, count: number, startIndex: number): Contact[] {
   const contacts: Contact[] = [];
+  const usedCompanies = new Set<string>();
+  const usedEmailKeys = new Set<string>();
+
   for (let i = 0; i < count; i++) {
     const firstName = rng.pick(FIRST_NAMES);
     const lastName = rng.pick(LAST_NAMES);
     const domain = rng.pick(EMAIL_DOMAINS);
     const localStyle = rng.int(3);
-    const local =
+    let local =
       localStyle === 0
         ? `${firstName}.${lastName}`
         : localStyle === 1
           ? `${firstName[0]}${lastName}`
           : `${firstName}${lastName}`;
+
+    // Dedupe on the same key normalizeEmail() would produce (lowercase,
+    // dots stripped) — an accidental exact collision would otherwise plant
+    // an unintended emailExact match between two unrelated contacts.
+    let emailKey = `${local.toLowerCase().replace(/\./g, "")}@${domain}`;
+    if (usedEmailKeys.has(emailKey)) {
+      local = `${local}${rng.int(9000) + 1000}`;
+      emailKey = `${local.toLowerCase().replace(/\./g, "")}@${domain}`;
+    }
+    usedEmailKeys.add(emailKey);
+
     const email = rng.next() < 0.5 ? `${local}@${domain}`.toLowerCase() : `${local}@${domain}`;
     const phone = formatPhone(rng, randomPhoneDigits(rng));
-    const company = accountRawName(rng, companyName(rng));
+    const company = accountRawName(rng, companyName(rng, usedCompanies));
     const hasLinkedin = rng.next() < 0.4;
     const linkedinUrl = hasLinkedin
       ? `${rng.next() < 0.5 ? "https://www.linkedin.com/in/" : "linkedin.com/in/"}${slug(firstName)}${slug(lastName)}${rng.int(90) + 10}`
@@ -174,8 +210,9 @@ function generateBaseContacts(rng: Rng, count: number, startIndex: number): Cont
 
 function generateBaseAccounts(rng: Rng, count: number, startIndex: number): Account[] {
   const accounts: Account[] = [];
+  const usedNames = new Set<string>();
   for (let i = 0; i < count; i++) {
-    const base = companyName(rng);
+    const base = companyName(rng, usedNames);
     const name = accountRawName(rng, base);
     const domain = `${rng.next() < 0.5 ? "www." : ""}${slug(base)}.com`;
     const phone = formatPhone(rng, randomPhoneDigits(rng));

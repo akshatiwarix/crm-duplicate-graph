@@ -17,18 +17,19 @@ function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
+export type PairScore = { score: number; signals: MatchSignal[] };
+
 /**
  * `score = emailExact + phoneExact + linkedinExact + pairScore` (PLAN.md §
  * Method). `pairScore` is a single joint signal: it fires only when *both*
  * the name and company floors are crossed together, never from one alone —
  * so it appears as one receipt row, not two.
+ *
+ * Raw score, ungated by any tier — separated from `buildContactEdge` below
+ * so the sweep's weight-monotonicity check can compare scores for pairs that
+ * never clear the `possible` floor at all.
  */
-export function buildContactEdge(
-  a: Contact,
-  b: Contact,
-  weights: ContactSignalWeights,
-  tiers: { high: number; possible: number },
-): MatchEdge | null {
+export function scoreContactPair(a: Contact, b: Contact, weights: ContactSignalWeights): PairScore {
   const signals: MatchSignal[] = [];
   let score = 0;
 
@@ -70,6 +71,16 @@ export function buildContactEdge(
     });
   }
 
+  return { score, signals };
+}
+
+export function buildContactEdge(
+  a: Contact,
+  b: Contact,
+  weights: ContactSignalWeights,
+  tiers: { high: number; possible: number },
+): MatchEdge | null {
+  const { score, signals } = scoreContactPair(a, b, weights);
   if (score < tiers.possible) return null;
   return {
     sourceId: a.id,
@@ -84,13 +95,10 @@ export function buildContactEdge(
  * `score = domainExact + phoneExact + nameScore + addressScore` (PLAN.md §
  * Method). Name and address are independent signals here, not a joint pair —
  * each contributes on its own once it clears its own floor.
+ *
+ * Raw score, ungated by any tier — see `scoreContactPair` above.
  */
-export function buildAccountEdge(
-  a: Account,
-  b: Account,
-  weights: AccountSignalWeights,
-  tiers: { high: number; possible: number },
-): MatchEdge | null {
+export function scoreAccountPair(a: Account, b: Account, weights: AccountSignalWeights): PairScore {
   const signals: MatchSignal[] = [];
   let score = 0;
 
@@ -130,6 +138,16 @@ export function buildAccountEdge(
     });
   }
 
+  return { score, signals };
+}
+
+export function buildAccountEdge(
+  a: Account,
+  b: Account,
+  weights: AccountSignalWeights,
+  tiers: { high: number; possible: number },
+): MatchEdge | null {
+  const { score, signals } = scoreAccountPair(a, b, weights);
   if (score < tiers.possible) return null;
   return {
     sourceId: a.id,
