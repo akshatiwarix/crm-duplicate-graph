@@ -20,7 +20,16 @@ import { contactCorpusSchema, type Contact } from "@/lib/domain/contact";
 import { accountCorpusSchema, type Account } from "@/lib/domain/account";
 import { DEFAULT_SIGNAL_WEIGHTS } from "@/lib/domain/defaults";
 import { Rng, derive } from "@/lib/rng";
-import { scoreContactPair, scoreAccountPair } from "./pathology-formulas";
+import {
+  scoreContactPair,
+  scoreAccountPair,
+  normalizeEmail,
+  normalizeLinkedin,
+  normalizeDomain,
+  normalizePhone,
+  normalizeCompanyName,
+  similarity,
+} from "./pathology-formulas";
 
 export const CORPUS_GENERATION_SEED = 20260821;
 
@@ -119,21 +128,43 @@ function formatPhone(rng: Rng, tenDigits: string): string {
   }
 }
 
-// `used` is scoped per entity type by the caller (contacts' `company` field
-// and accounts' `name` field are never compared to each other, so they don't
-// need to share a dedupe set) — retried up to 50 times, then disambiguated
-// with a number, so no two records in the same entity type ever draw the
-// exact same name (which the audited pool above alone can't guarantee).
-function companyName(rng: Rng, used: Set<string>): string {
+function companyName(rng: Rng): string {
+  return `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
+}
+
+// Checked by actual similarity against every prior account name, not exact
+// match — an account's name is an independent scoring signal (not gated
+// behind a joint pair like contacts' name+company), so two *different*
+// prefixes sharing a long suffix ("Delta Insurance" / "Dovetail Insurance")
+// are just as real a risk as an exact repeat. `used` grows to at most ~500
+// entries, so the O(n^2) similarity scan stays well under a second.
+// Retried 50 times, then a numeric-suffixed fallback — itself re-checked
+// against `used` for the same reason the plain fallback isn't good enough
+// for contacts' company field (see generateBaseContacts): a *repeated* base
+// disambiguated twice with different numbers is still a near-duplicate.
+function uniqueAccountName(rng: Rng, used: string[], floor: number): string {
+  const tooSimilar = (candidate: string) =>
+    used.some((prior) => similarity(normalizeCompanyName(candidate), normalizeCompanyName(prior)) >= floor);
+
   for (let attempt = 0; attempt < 50; attempt++) {
-    const name = `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
-    if (!used.has(name)) {
-      used.add(name);
+    const name = companyName(rng);
+    if (!tooSimilar(name)) {
+      used.push(name);
       return name;
     }
   }
-  const name = `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)} ${rng.int(9000) + 1000}`;
-  used.add(name);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const name = `${companyName(rng)} ${rng.int(9000) + 1000}`;
+    if (!tooSimilar(name)) {
+      used.push(name);
+      return name;
+    }
+  }
+  // Unreachable in practice given pool size vs. draw count; a last resort
+  // that can't repeat the same-base-disambiguated-twice mistake since the
+  // number space is wide enough that two draws colliding is negligible.
+  const name = `${companyName(rng)} ${rng.int(900000) + 100000}`;
+  used.push(name);
   return name;
 }
 
@@ -156,10 +187,38 @@ function randomAddress(rng: Rng): string {
  * Base contact generation.
  * ------------------------------------------------------------------ */
 
-function generateBaseContacts(rng: Rng, count: number, startIndex: number): Contact[] {
+type ContactReservations = {
+  emailKeys: Set<string>;
+  linkedins: Set<string>;
+};
+
+function generateBaseContacts(
+  rng: Rng,
+  count: number,
+  startIndex: number,
+  reserved: ContactReservations,
+): Contact[] {
   const contacts: Contact[] = [];
-  const usedCompanies = new Set<string>();
-  const usedEmailKeys = new Set<string>();
+  // Seeded with the pathology records' own identities (see generateCorpus)
+  // so random background generation can never redraw one of them by
+  // chance — several of the pathology names ("Priya Nakamura", "Owen
+  // Castellan") are drawn from the same FIRST_NAMES/LAST_NAMES pools as the
+  // base population, and a coincidental exact email/linkedin match would
+  // plant an unintended edge exactly like the "Rosa Osei" bug this same
+  // reservation pattern already fixed for base-vs-base collisions.
+  const usedEmailKeys = new Set<string>(reserved.emailKeys);
+  const usedLinkedins = new Set<string>(reserved.linkedins);
+  // Companies repeat across contacts on purpose (colleagues share an
+  // employer) — but a name repeating *and* landing a company that's at
+  // least as similar as the real companyFloor fires the real joint
+  // pairScore ("Noor Kowalczyk" x2 at "Quicksilver Software"/"...Ltd."; then
+  // "Silas Ellsworth" x2 at "Delta Insurance"/"Dovetail Insurance" — two
+  // *different* prefixes a long shared suffix made similar enough anyway).
+  // Checked by actual similarity, not exact match, and only against this
+  // name's own small history — a corpus-wide set is what caused the
+  // numeric-fallback-creates-near-dupes mistake above.
+  const companyFloor = DEFAULT_SIGNAL_WEIGHTS.contact.companyFloor;
+  const companiesByName = new Map<string, string[]>();
 
   for (let i = 0; i < count; i++) {
     const firstName = rng.pick(FIRST_NAMES);
@@ -173,23 +232,49 @@ function generateBaseContacts(rng: Rng, count: number, startIndex: number): Cont
           ? `${firstName[0]}${lastName}`
           : `${firstName}${lastName}`;
 
-    // Dedupe on the same key normalizeEmail() would produce (lowercase,
-    // dots stripped) — an accidental exact collision would otherwise plant
-    // an unintended emailExact match between two unrelated contacts.
-    let emailKey = `${local.toLowerCase().replace(/\./g, "")}@${domain}`;
+    // Dedupe on the same key normalizeEmail() would produce — an accidental
+    // exact collision would otherwise plant an unintended emailExact match
+    // between two unrelated contacts.
+    let emailKey = normalizeEmail(`${local}@${domain}`);
     if (usedEmailKeys.has(emailKey)) {
       local = `${local}${rng.int(9000) + 1000}`;
-      emailKey = `${local.toLowerCase().replace(/\./g, "")}@${domain}`;
+      emailKey = normalizeEmail(`${local}@${domain}`);
     }
     usedEmailKeys.add(emailKey);
 
     const email = rng.next() < 0.5 ? `${local}@${domain}`.toLowerCase() : `${local}@${domain}`;
     const phone = formatPhone(rng, randomPhoneDigits(rng));
-    const company = accountRawName(rng, companyName(rng, usedCompanies));
+    const nameKey = `${firstName}|${lastName}`;
+    const priorCompanies = companiesByName.get(nameKey) ?? [];
+    const tooSimilarToPrior = (candidate: string) =>
+      priorCompanies.some(
+        (prior) => similarity(normalizeCompanyName(candidate), normalizeCompanyName(prior)) >= companyFloor,
+      );
+    let companyBase = companyName(rng);
+    for (let attempt = 0; attempt < 10 && tooSimilarToPrior(companyBase); attempt++) {
+      companyBase = companyName(rng);
+    }
+    priorCompanies.push(companyBase);
+    companiesByName.set(nameKey, priorCompanies);
+    const company = accountRawName(rng, companyBase);
     const hasLinkedin = rng.next() < 0.4;
-    const linkedinUrl = hasLinkedin
-      ? `${rng.next() < 0.5 ? "https://www.linkedin.com/in/" : "linkedin.com/in/"}${slug(firstName)}${slug(lastName)}${rng.int(90) + 10}`
-      : undefined;
+    let linkedinUrl: string | undefined;
+    if (hasLinkedin) {
+      const base = `${slug(firstName)}${slug(lastName)}`;
+      // A 2-digit suffix (80 options) collides often for a popular name —
+      // exactly how two different "Rosa Osei" contacts once ended up with
+      // the identical slug and an unintended linkedinExact match. Retry
+      // with a wider range, then fall back to a 6-digit one.
+      let candidate = `${rng.next() < 0.5 ? "https://www.linkedin.com/in/" : "linkedin.com/in/"}${base}${rng.int(90) + 10}`;
+      for (let attempt = 0; attempt < 20 && usedLinkedins.has(normalizeLinkedin(candidate)); attempt++) {
+        candidate = `${rng.next() < 0.5 ? "https://www.linkedin.com/in/" : "linkedin.com/in/"}${base}${rng.int(900) + 100}`;
+      }
+      if (usedLinkedins.has(normalizeLinkedin(candidate))) {
+        candidate = `${rng.next() < 0.5 ? "https://www.linkedin.com/in/" : "linkedin.com/in/"}${base}${rng.int(900000) + 100000}`;
+      }
+      usedLinkedins.add(normalizeLinkedin(candidate));
+      linkedinUrl = candidate;
+    }
 
     contacts.push({
       id: `contact-${String(startIndex + i + 1).padStart(4, "0")}`,
@@ -208,11 +293,22 @@ function generateBaseContacts(rng: Rng, count: number, startIndex: number): Cont
  * Base account generation.
  * ------------------------------------------------------------------ */
 
-function generateBaseAccounts(rng: Rng, count: number, startIndex: number): Account[] {
+function generateBaseAccounts(
+  rng: Rng,
+  count: number,
+  startIndex: number,
+  reservedNames: string[],
+): Account[] {
   const accounts: Account[] = [];
-  const usedNames = new Set<string>();
+  // Seeded with the pathology accounts' own `name` fields (see
+  // generateCorpus) — THE CHAIN's "Gantry Manufacturing" and "Vaultbridge
+  // Insurance" are literal prefix+suffix combos from the pools below, so
+  // random generation could otherwise redraw one (exactly, or closely
+  // enough to still cross the floor) and plant an unintended match.
+  const usedNames = [...reservedNames];
+  const nameFloor = DEFAULT_SIGNAL_WEIGHTS.account.nameFloor;
   for (let i = 0; i < count; i++) {
-    const base = companyName(rng, usedNames);
+    const base = uniqueAccountName(rng, usedNames, nameFloor);
     const name = accountRawName(rng, base);
     const domain = `${rng.next() < 0.5 ? "www." : ""}${slug(base)}.com`;
     const phone = formatPhone(rng, randomPhoneDigits(rng));
@@ -564,6 +660,113 @@ function verifyPathologies(contacts: Contact[], accounts: Account[]): void {
   }
 }
 
+/**
+ * Guards against the whole bug class behind the "Rosa Osei" / "Priya
+ * Nakamura" / "Gantry Manufacturing" incidents: a pathology record's exact-
+ * match identity (email, LinkedIn, domain, phone) accidentally recreated by
+ * random background generation, planting an unintended edge nobody asked
+ * for. The reservation Sets in generateBaseContacts/generateBaseAccounts are
+ * the fix; this re-checks the *assembled* corpus so a future change to
+ * either generator can't silently reopen the gap.
+ */
+function verifyNoAccidentalCollisions(
+  pathologyContacts: Contact[],
+  baseContacts: Contact[],
+  pathologyAccounts: Account[],
+  baseAccounts: Account[],
+): void {
+  for (const p of pathologyContacts) {
+    const pEmail = normalizeEmail(p.email);
+    const pLinkedin = p.linkedinUrl ? normalizeLinkedin(p.linkedinUrl) : null;
+    for (const b of baseContacts) {
+      if (normalizeEmail(b.email) === pEmail) {
+        throw new Error(`accidental email collision: base ${b.id} vs pathology ${p.id} (${pEmail})`);
+      }
+      if (pLinkedin && b.linkedinUrl && normalizeLinkedin(b.linkedinUrl) === pLinkedin) {
+        throw new Error(`accidental linkedin collision: base ${b.id} vs pathology ${p.id} (${pLinkedin})`);
+      }
+    }
+  }
+
+  for (const p of pathologyAccounts) {
+    const pDomain = normalizeDomain(p.domain);
+    const pPhone = normalizePhone(p.phone);
+    for (const b of baseAccounts) {
+      if (normalizeDomain(b.domain) === pDomain) {
+        throw new Error(`accidental domain collision: base ${b.id} vs pathology ${p.id} (${pDomain})`);
+      }
+      if (normalizePhone(b.phone) === pPhone) {
+        throw new Error(`accidental phone collision: base ${b.id} vs pathology ${p.id} (${pPhone})`);
+      }
+    }
+  }
+}
+
+/**
+ * Base contacts don't have unique companies (colleagues sharing an employer
+ * is realistic) — but the *joint* coincidence of a repeated name landing a
+ * repeated-or-similar company too would fire the real pairScore, exactly
+ * like the "Rosa Osei" family of bugs. Cheap to check exactly: group by the
+ * normalized full name (the dominant path to nameSim >= floor is an exact
+ * repeat, since names come from a small fixed pool) and only score pairs
+ * within a group, rather than the full O(n^2) cross-product.
+ */
+function verifyNoAccidentalContactMatches(baseContacts: Contact[]): void {
+  const weights = DEFAULT_SIGNAL_WEIGHTS.contact;
+  const byName = new Map<string, Contact[]>();
+  for (const c of baseContacts) {
+    const key = `${c.firstName}|${c.lastName}`;
+    const group = byName.get(key);
+    if (group) group.push(c);
+    else byName.set(key, [c]);
+  }
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i];
+        const b = group[j];
+        if (!a || !b) continue;
+        const { score } = scoreContactPair(a, b, weights);
+        if (score > 0) {
+          throw new Error(`accidental contact match: base ${a.id} vs base ${b.id} scored ${score}`);
+        }
+      }
+    }
+  }
+}
+
+/** Same reasoning as above, grouped by the account blocking bucket (first 4 chars of the normalized name). */
+function verifyNoAccidentalAccountMatches(baseAccounts: Account[]): void {
+  const weights = DEFAULT_SIGNAL_WEIGHTS.account;
+  const domains = new Set<string>();
+  const byName4 = new Map<string, Account[]>();
+  for (const a of baseAccounts) {
+    const domain = normalizeDomain(a.domain);
+    if (domains.has(domain)) throw new Error(`duplicate account domain: ${a.id} (${domain})`);
+    domains.add(domain);
+
+    const key = a.name.slice(0, 4).toLowerCase();
+    const group = byName4.get(key);
+    if (group) group.push(a);
+    else byName4.set(key, [a]);
+  }
+  for (const group of byName4.values()) {
+    if (group.length < 2) continue;
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i];
+        const b = group[j];
+        if (!a || !b) continue;
+        const { score } = scoreAccountPair(a, b, weights);
+        if (score > 0) {
+          throw new Error(`accidental account match: base ${a.id} vs base ${b.id} scored ${score}`);
+        }
+      }
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Entry point.
  * ------------------------------------------------------------------ */
@@ -585,20 +788,33 @@ export function generateCorpus(): { contacts: Contact[]; accounts: Account[] } {
     ...buildAccountGhost(),
   ];
 
+  const reservedContacts: ContactReservations = {
+    emailKeys: new Set(pathologyContacts.map((c) => normalizeEmail(c.email))),
+    linkedins: new Set(
+      pathologyContacts.flatMap((c) => (c.linkedinUrl ? [normalizeLinkedin(c.linkedinUrl)] : [])),
+    ),
+  };
+  const reservedAccountNames = pathologyAccounts.map((a) => a.name);
+
   const baseContacts = generateBaseContacts(
     contactRng,
     TOTAL_CONTACTS - pathologyContacts.length,
     0,
+    reservedContacts,
   );
   const baseAccounts = generateBaseAccounts(
     accountRng,
     TOTAL_ACCOUNTS - pathologyAccounts.length,
     0,
+    reservedAccountNames,
   );
 
   const contacts = [...baseContacts, ...pathologyContacts];
   const accounts = [...baseAccounts, ...pathologyAccounts];
 
+  verifyNoAccidentalCollisions(pathologyContacts, baseContacts, pathologyAccounts, baseAccounts);
+  verifyNoAccidentalContactMatches(baseContacts);
+  verifyNoAccidentalAccountMatches(baseAccounts);
   verifyPathologies(contacts, accounts);
   contactCorpusSchema.parse(contacts);
   accountCorpusSchema.parse(accounts);

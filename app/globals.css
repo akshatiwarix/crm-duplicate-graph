@@ -1,26 +1,66 @@
 @import "tailwindcss";
 
+/*
+ * Ledger palette: cool paper, ink, hairline rules, two accents that map
+ * directly onto the two confidence tiers rather than being decorative —
+ * garnet (high) reads as "confident, act on it"; amber (possible) reads as
+ * "worth a look, not a foregone conclusion". Never a third accent; every
+ * other color decision routes through ink/line.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --paper: #f5f4f1;
+  --paper-raised: #fdfcfa;
+  --ink: #1c1a17;
+  --ink-dim: #6b6459;
+  --line: #ded9d0;
+  --line-strong: #b7afa1;
+  --high: #a02638;
+  --high-dim: #e3b8bd;
+  --possible: #92661a;
+  --possible-dim: #dcc491;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #16140f;
+    --paper-raised: #1d1a14;
+    --ink: #ede9e2;
+    --ink-dim: #a49b8a;
+    --line: #35301f;
+    --line-strong: #4a4429;
+    --high: #e2717e;
+    --high-dim: #4a2229;
+    --possible: #d1a13f;
+    --possible-dim: #423215;
   }
 }
 
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-raised: var(--paper-raised);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-high: var(--high);
+  --color-high-dim: var(--high-dim);
+  --color-possible: var(--possible);
+  --color-possible-dim: var(--possible-dim);
+  --font-display: var(--font-newsreader);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+* {
+  border-color: var(--line);
+}
+
+/* Tabular figures wherever a number is measured, not just labeled. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
