@@ -522,18 +522,18 @@ repos.
 
 ## Definition of done
 
-- [ ] `npm run build`, `npm run typecheck`, `npm run lint` all clean.
-- [ ] `npm test` green, including all pathology assertions for both entity types.
-- [ ] `npm run sweep` green on all nine invariants.
-- [ ] Console live on Vercel, opening on computed clusters with no interaction.
-- [ ] All four console sections implemented, reading from one match+cluster pass.
-- [ ] Every displayed edge shows its full signal-by-signal receipt.
-- [ ] Blocking-completeness invariant passes against a brute-force sample.
-- [ ] Permalink round-trips; clusters byte-identical.
-- [ ] Zero-weight and inverted-tier configs produce a named refusal/empty state, never
+- [x] `npm run build`, `npm run typecheck`, `npm run lint` all clean.
+- [x] `npm test` green, including all pathology assertions for both entity types.
+- [x] `npm run sweep` green on all nine invariants.
+- [x] Console live on Vercel, opening on computed clusters with no interaction.
+- [x] All four console sections implemented, reading from one match+cluster pass.
+- [x] Every displayed edge shows its full signal-by-signal receipt.
+- [x] Blocking-completeness invariant passes against a brute-force sample.
+- [x] Permalink round-trips; clusters byte-identical.
+- [x] Zero-weight and inverted-tier configs produce a named refusal/empty state, never
       a crash.
-- [ ] README with real screenshots from the live deployment; plain-English guide.
-- [ ] Every task pushed to `main`.
+- [x] README with real screenshots from the live deployment; plain-English guide.
+- [x] Every task pushed to `main`.
 
 ---
 
