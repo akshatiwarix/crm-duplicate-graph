@@ -36,7 +36,9 @@ export function normalizeContactName(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-const LEGAL_SUFFIX_RE = /\b(inc|llc|ltd|corp|co|company)\.?\b/g;
+// See lib/match/normalize.ts for why the period sits before a lookahead
+// rather than `\b` (otherwise "Acme Corp." -> "acme ." instead of "acme").
+const LEGAL_SUFFIX_RE = /\b(inc|llc|ltd|corp|co|company)\.?(?=\s|$)/g;
 
 export function normalizeCompanyName(raw: string): string {
   const lowered = raw.trim().toLowerCase();
@@ -69,7 +71,10 @@ const STREET_SUFFIX_MAP: Record<string, string> = {
 };
 
 export function normalizeAddress(raw: string): string {
-  const s = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  // Commas are formatting noise ("123 Main St, Springfield, IL") that would
+  // otherwise stick to the street-suffix word and block the canonicalization
+  // lookup below.
+  const s = raw.trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, " ");
   const words = s.split(" ").map((w) => {
     const bare = w.replace(/\.$/, "");
     return STREET_SUFFIX_MAP[bare] ?? bare;
