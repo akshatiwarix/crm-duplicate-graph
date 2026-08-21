@@ -18,7 +18,19 @@ const HEIGHT = 380;
 const MARGIN = 34;
 
 function layoutCluster(cluster: Cluster): Map<string, { x: number; y: number }> {
-  const nodes: SimNode[] = cluster.recordIds.map((id) => ({ id }));
+  // Seeded on a circle by sorted index — d3-force otherwise starts every
+  // node from Math.random(), so the "same" cluster renders a different
+  // layout (and a different label position) on every reload.
+  const count = cluster.recordIds.length;
+  const radius = Math.min(WIDTH, HEIGHT) / 4;
+  const nodes: SimNode[] = cluster.recordIds.map((id, i) => {
+    const angle = (2 * Math.PI * i) / count;
+    return {
+      id,
+      x: WIDTH / 2 + radius * Math.cos(angle),
+      y: HEIGHT / 2 + radius * Math.sin(angle),
+    };
+  });
   const links = cluster.edges.map((e) => ({ source: e.sourceId, target: e.targetId }));
 
   const simulation = forceSimulation(nodes)
@@ -88,7 +100,7 @@ export function GraphView({ cluster, displayName, selectedEdgeKey, onSelectEdge 
         // perpendicular direction pushes the label *upward*, away from that
         // below-node label zone, rather than a fixed rotation that can push
         // it the wrong way depending on the edge's angle.
-        const offset = 16;
+        const offset = 26;
         const perpX = (-dy / len) * offset;
         const perpY = (dx / len) * offset;
         const sign = perpY <= 0 ? 1 : -1;
