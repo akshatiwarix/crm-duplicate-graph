@@ -79,8 +79,15 @@ export function GraphView({ cluster, displayName, selectedEdgeKey, onSelectEdge 
         const key = edgeKey(edge);
         const selected = key === selectedEdgeKey;
         const color = edge.tier === "high" ? "var(--high)" : "var(--possible)";
-        const midX = (from.x + to.x) / 2;
-        const midY = (from.y + to.y) / 2;
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // Offset the score label perpendicular to the edge, not just at the
+        // raw midpoint — two close nodes on a steep/short edge otherwise put
+        // the label right on top of a node's name (drawn below the node).
+        const offset = 11;
+        const midX = (from.x + to.x) / 2 + (-dy / len) * offset;
+        const midY = (from.y + to.y) / 2 + (dx / len) * offset;
         return (
           <g key={key} className="cursor-pointer" onClick={() => onSelectEdge(edge)}>
             <line
@@ -92,7 +99,7 @@ export function GraphView({ cluster, displayName, selectedEdgeKey, onSelectEdge 
               strokeWidth={selected ? 3 : 1.5}
               opacity={selected ? 1 : 0.55}
             />
-            <rect x={midX - 12} y={midY - 12} width={24} height={16} fill="var(--paper-raised)" opacity={0.85} />
+            <rect x={midX - 13} y={midY - 8} width={26} height={16} fill="var(--paper-raised)" />
             <text
               x={midX}
               y={midY}
