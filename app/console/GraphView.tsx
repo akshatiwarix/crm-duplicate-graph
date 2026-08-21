@@ -26,12 +26,12 @@ function layoutCluster(cluster: Cluster): Map<string, { x: number; y: number }> 
       "link",
       forceLink<SimNode, (typeof links)[number]>(links)
         .id((d) => d.id)
-        .distance(100)
+        .distance(150)
         .strength(0.5),
     )
-    .force("charge", forceManyBody().strength(-260))
+    .force("charge", forceManyBody().strength(-320))
     .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
-    .force("collide", forceCollide(34))
+    .force("collide", forceCollide(40))
     .stop();
 
   for (let i = 0; i < 300; i++) simulation.tick();
@@ -83,11 +83,17 @@ export function GraphView({ cluster, displayName, selectedEdgeKey, onSelectEdge 
         const dy = to.y - from.y;
         const len = Math.hypot(dx, dy) || 1;
         // Offset the score label perpendicular to the edge, not just at the
-        // raw midpoint — two close nodes on a steep/short edge otherwise put
-        // the label right on top of a node's name (drawn below the node).
-        const offset = 11;
-        const midX = (from.x + to.x) / 2 + (-dy / len) * offset;
-        const midY = (from.y + to.y) / 2 + (dx / len) * offset;
+        // raw midpoint — two close nodes otherwise put the label right on
+        // top of a node's name (always drawn below the node). Pick whichever
+        // perpendicular direction pushes the label *upward*, away from that
+        // below-node label zone, rather than a fixed rotation that can push
+        // it the wrong way depending on the edge's angle.
+        const offset = 16;
+        const perpX = (-dy / len) * offset;
+        const perpY = (dx / len) * offset;
+        const sign = perpY <= 0 ? 1 : -1;
+        const midX = (from.x + to.x) / 2 + perpX * sign;
+        const midY = (from.y + to.y) / 2 + perpY * sign;
         return (
           <g key={key} className="cursor-pointer" onClick={() => onSelectEdge(edge)}>
             <line
